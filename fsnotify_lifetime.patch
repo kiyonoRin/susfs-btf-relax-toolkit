@@ -1,0 +1,55 @@
+--- fsnotify_lifetime.c
++++ fsnotify_lifetime.c (patched)
+@@ -160,7 +160,13 @@
+     ret = susfs_btf_check_function("fsnotify_alloc_group", "fsnotify_group*",
+                                    alloc_two, ARRAY_SIZE(alloc_two));
+     susfs_alloc_with_flags = !ret;
+-    if (ret) {
++    if (ret == -ENOENT) {
++        /* shortcut: this kernel's BTF has no FUNC entry for the exported
++         * fsnotify_alloc_group; assume the android13-5.15 single-arg form.
++         * Upgrade when the kernel ships complete BTF FUNC entries. */
++        susfs_alloc_with_flags = false;
++        pr_info("sus_path: alloc_group FUNC absent in BTF, assuming 1-arg\n");
++    } else if (ret) {
+         ret = susfs_btf_check_function("fsnotify_alloc_group", "fsnotify_group*",
+                                        alloc_one, ARRAY_SIZE(alloc_one));
+         if (ret)
+@@ -172,7 +178,12 @@
+     if (ret) {
+         ret = susfs_btf_check_function("fsnotify_add_mark", "int",
+                                        add_five, ARRAY_SIZE(add_five));
+-        if (ret)
++        if (ret == -ENOENT) {
++            /* shortcut: same as above; 5.15 uses the 5-arg form that reads
++             * super_block.s_fsnotify_marks via susfs_sb_marks_offset. */
++            susfs_add_with_object = false;
++            pr_info("sus_path: add_mark FUNC absent in BTF, assuming 5-arg\n");
++        } else if (ret)
+             return ret;
+         ret = susfs_btf_field_offset("super_block", "s_fsnotify_marks",
+                                      "fsnotify_mark_connector*", &susfs_sb_marks_offset);
+@@ -181,17 +192,18 @@
+     }
+     ret = susfs_btf_check_function("fsnotify_init_mark", "void",
+                                    mark_group, ARRAY_SIZE(mark_group));
+-    if (ret)
++    if (ret && ret != -ENOENT)
+         return ret;
+     ret = susfs_btf_check_function("fsnotify_put_mark", "void",
+                                    mark_one, ARRAY_SIZE(mark_one));
+-    if (ret)
++    if (ret && ret != -ENOENT)
+         return ret;
+     ret = susfs_btf_check_function("fsnotify_destroy_group", "void",
+                                    group_one, ARRAY_SIZE(group_one));
+-    if (ret)
+-        return ret;
+-    return susfs_btf_check_function("fsnotify_wait_marks_destroyed", "void", NULL, 0);
++    if (ret && ret != -ENOENT)
++        return ret;
++    ret = susfs_btf_check_function("fsnotify_wait_marks_destroyed", "void", NULL, 0);
++    return (ret == -ENOENT) ? 0 : ret;
+ }
+ 
+ int susfs_sb_watch_init(void (*release)(struct super_block *))
